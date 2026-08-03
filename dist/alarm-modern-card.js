@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.3.0";
+const CARD_VERSION = "1.4.0";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -252,6 +252,13 @@ class AlarmModernCard extends HTMLElement {
       if (["door","opening","window"].includes(dc) && dom === "binary_sensor") {
         prefix = id.replace(/^binary_sensor\./, "").replace(/_porte$|_ouverture$/, "");
         kind = "zone";
+      } else if (dom === "select" || dom === "input_select") {
+        // select avec options open/closed : porte de garage, portail, volet
+        const opts = (st.attributes?.options || []).map((o) => String(o).toLowerCase());
+        if (opts.some((o) => ["open","ouvert"].includes(o)) && opts.some((o) => ["closed","ferme","fermé"].includes(o))) {
+          prefix = id.replace(/^(?:select|input_select)\./, "").replace(/_position$|_state$/, "");
+          kind = "zone";
+        }
       } else if (["motion","occupancy"].includes(dc) && dom === "binary_sensor") {
         prefix = id.replace(/^binary_sensor\./, "").replace(/_mouvement$/, "");
         kind = "motion";
@@ -621,9 +628,24 @@ class AlarmModernCard extends HTMLElement {
       .map((z, i) => {
         const s = this._st(z.entity);
         const dc = z.type || s?.attributes?.device_class || "door";
-        const on = s?.state === "on";
+        const dom = (z.entity || "").split(".")[0];
+        // binary_sensor : on = ouvert. select : open/partial = ouvert
+        const isOpen = (st) => {
+          if (!st) return false;
+          if (dom === "binary_sensor") return st.state === "on";
+          if (dom === "select" || dom === "input_select") {
+            const v = String(st.state).toLowerCase();
+            return ["open","ouvert","partial","partiel","opening","opening","moving"].includes(v);
+          }
+          if (dom === "cover") return ["open","opening"].includes(st.state);
+          return st.state === "on";
+        };
+        const on = isOpen(s);
         const name = z.name || s?.attributes?.friendly_name || z.entity;
-        const label = on ? z.open_label || "Ouvert" : z.closed_label || "Fermé";
+        // Pour les select : utiliser l'etat comme label
+        const label = on
+          ? (z.open_label || (dom === "select" ? s?.state : "Ouvert"))
+          : (z.closed_label || (dom === "select" ? s?.state : "Fermé"));
         return `<div class="zc${on ? " alert" : ""}" data-i="${i}">
           <svg viewBox="0 0 24 24">${ZONE_ICON[dc] || I.door}</svg>
           <div class="zt"><b>${esc(name)}</b><span>${esc(label)}</span></div></div>`;
@@ -804,7 +826,19 @@ class AlarmModernCard extends HTMLElement {
 
     /* Sous-titre */
     const zones = this._effectiveZones();
-    const open = zones.filter((z) => this._st(z.entity)?.state === "on");
+    const isOpen = (z) => {
+      const st = this._st(z.entity);
+      if (!st) return false;
+      const dom = (z.entity || "").split(".")[0];
+      if (dom === "binary_sensor") return st.state === "on";
+      if (dom === "select" || dom === "input_select") {
+        const v = String(st.state).toLowerCase();
+        return ["open","ouvert","partial","partiel","opening","moving"].includes(v);
+      }
+      if (dom === "cover") return ["open","opening"].includes(st.state);
+      return st.state === "on";
+    };
+    const open = zones.filter((z) => isOpen(z));
     if (mode === "off") {
       e.sub.textContent = open.length
         ? `${open.length} zone${open.length > 1 ? "s" : ""} ouverte${open.length > 1 ? "s" : ""}`
@@ -1100,7 +1134,7 @@ const SCHEMA = [
   {
     type: "expandable", name: "", title: "Ouvrants et capteurs supplémentaires", icon: "mdi:plus-circle-outline",
     schema: [
-      { name: "custom_zones", selector: { entity: { multiple: true, filter: [{ domain: "binary_sensor", device_class: ["door", "window", "opening", "garage_door", "gate", "blind", "shutter", "awning"] }] } } },
+      { name: "custom_zones", selector: { entity: { multiple: true, filter: [{ domain: "binary_sensor", domain: ["binary_sensor", "select", "input_select", "cover", "sensor"] }] } } },
       { name: "custom_fire", selector: { entity: { multiple: true, filter: [{ domain: "binary_sensor", device_class: ["smoke", "heat", "carbon_monoxide", "gas"] }] } } },
       { name: "custom_sensors", selector: { entity: { multiple: true, filter: [{ domain: "sensor", device_class: "battery" }] } } },
     ],
