@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -110,6 +110,7 @@ class AlarmModernCard extends HTMLElement {
       show_coverage: true,
       show_zones: true,
       battery_warning: 30,
+      auto_discover: false,
       links: [],
       zones: [],
       fire: [],
@@ -222,6 +223,70 @@ class AlarmModernCard extends HTMLElement {
   _alarm() {
     return this._st(this._config.alarm);
   }
+
+  _discover() {
+    const c = this._config;
+    if (!c.auto_discover || !c.alarm || !this._hass?.entities) return null;
+    const alarmDev = this._hass.entities[c.alarm]?.device_id;
+    if (!alarmDev) return null;
+    const allIds = Object.keys(this._hass.states);
+    const devOf = (id) => this._hass.entities?.[id]?.device_id;
+    const sameDev = (id) => {
+      const d = devOf(id);
+      if (!d) return false;
+      if (d === alarmDev) return true;
+      const dev = this._hass.devices?.[d];
+      const alarmDevice = this._hass.devices?.[alarmDev];
+      return dev && alarmDevice &&
+        (dev.manufacturer === alarmDevice.manufacturer ||
+         (dev.config_entries || []).some((e) => (alarmDevice.config_entries || []).includes(e)));
+    };
+    const groups = {};
+    for (const id of allIds) {
+      if (!sameDev(id)) continue;
+      const st = this._hass.states[id];
+      if (!st || isDead(st.state)) continue;
+      const dc = st.attributes?.device_class || "";
+      const dom = id.split(".")[0];
+      let prefix = null, kind = null;
+      if (["door","opening","window"].includes(dc) && dom === "binary_sensor") {
+        prefix = id.replace(/^binary_sensor\./, "").replace(/_porte$|_ouverture$/, "");
+        kind = "zone";
+      } else if (["motion","occupancy"].includes(dc) && dom === "binary_sensor") {
+        prefix = id.replace(/^binary_sensor\./, "").replace(/_mouvement$/, "");
+        kind = "motion";
+      } else if (["smoke","heat","carbon_monoxide","gas"].includes(dc) && dom === "binary_sensor") {
+        prefix = id.replace(/^binary_sensor\./, "").replace(/_fumee$|_fum\u00e9e$|_chaleur$|_monoxyde_de_carbone$|_vapeur$/, "");
+        kind = "fire";
+      } else if (dc === "tamper" && dom === "binary_sensor") {
+        prefix = id.replace(/^binary_sensor\./, "").replace(/_sabotage_du_boitier$|_inclinaison$/, "");
+        kind = "tamper";
+      } else if (dc === "battery" && dom === "sensor") {
+        prefix = id.replace(/^sensor\./, "").replace(/_batterie$/, "");
+        kind = "battery";
+      } else if (dc === "temperature" && dom === "sensor") {
+        prefix = id.replace(/^sensor\./, "").replace(/_temperature$/, "");
+        kind = "temperature";
+      }
+      if (prefix && kind) (groups[prefix] = groups[prefix] || {})[kind] = id;
+    }
+    const zones = [], fire = [], sensors = [];
+    const allZones = c.zones || [], allFire = c.fire || [], allSensors = c.sensors || [];
+    const knownZ = new Set(allZones.map((z) => z.entity));
+    const knownF = new Set(allFire.map((f) => f.entity));
+    const knownS = new Set(allSensors.map((s) => s.entity));
+    for (const [prefix, g] of Object.entries(groups)) {
+      const fn = (id) => this._hass.states[id]?.attributes?.friendly_name || prefix;
+      const name = fn(g.zone || g.motion || g.fire || g.battery || g.temperature || prefix);
+      if (g.zone && !knownZ.has(g.zone)) { const dc = this._hass.states[g.zone]?.attributes?.device_class; zones.push({entity:g.zone,name,type:dc==="window"?"window":"door"}); knownZ.add(g.zone); }
+      if (g.motion && !knownZ.has(g.motion)) { zones.push({entity:g.motion,name,type:"motion"}); knownZ.add(g.motion); }
+      if (g.fire && !knownF.has(g.fire)) { fire.push({entity:g.fire,name,temperature:g.temperature||undefined}); knownF.add(g.fire); }
+      if (g.battery && !knownS.has(g.battery)) { sensors.push({entity:g.battery,name,temperature:g.temperature||undefined}); knownS.add(g.battery); }
+    }
+    return { zones: [...allZones, ...zones], fire: [...allFire, ...fire], sensors: [...allSensors, ...sensors] };
+  }
+
+
 
   /** 'off' | 'exit' | 'armed' | 'alarm' */
   _mode() {
@@ -543,11 +608,16 @@ class AlarmModernCard extends HTMLElement {
     if (e.covPct) e.covPct.textContent = cov ? `${Math.round(cov.pct * 100)} %` : "—";
   }
 
+  _effectiveZones() { const d = this._discover(); return d ? d.zones : (this._config.zones || []); }
+  _effectiveFire() { const d = this._discover(); return d ? d.fire : (this._config.fire || []); }
+  _effectiveSensors() { const d = this._discover(); return d ? d.sensors : (this._config.sensors || []); }
+
   _renderZones() {
     const c = this._config;
     const e = this._els;
     if (!e.zones) return;
-    e.zones.innerHTML = c.zones
+    const zones = this._effectiveZones();
+    e.zones.innerHTML = zones
       .map((z, i) => {
         const s = this._st(z.entity);
         const dc = z.type || s?.attributes?.device_class || "door";
@@ -560,16 +630,17 @@ class AlarmModernCard extends HTMLElement {
       })
       .join("");
     e.zones.querySelectorAll(".zc").forEach((el) => {
-      el.addEventListener("click", () => this._more(c.zones[Number(el.dataset.i)].entity));
+      el.addEventListener("click", () => this._more(zones[Number(el.dataset.i)].entity));
     });
   }
 
   _renderFire() {
     const c = this._config;
+    const fireList = this._effectiveFire();
     const e = this._els;
     if (!e.fireBody) return;
     let warn = false;
-    const rows = c.fire
+    const rows = fireList
       .map((f) => {
         const s = this._st(f.entity);
         if (!s) return "";
@@ -613,9 +684,10 @@ class AlarmModernCard extends HTMLElement {
 
   _renderSensors() {
     const c = this._config;
+    const sensorList = this._effectiveSensors();
     const e = this._els;
     if (!e.battBody) return;
-    const items = c.sensors
+    const items = sensorList
       .map((x) => {
         const s = this._st(x.entity);
         if (!s) return null;
@@ -731,7 +803,8 @@ class AlarmModernCard extends HTMLElement {
     else e.word.textContent = "Désarmé";
 
     /* Sous-titre */
-    const open = c.zones.filter((z) => this._st(z.entity)?.state === "on");
+    const zones = this._effectiveZones();
+    const open = zones.filter((z) => this._st(z.entity)?.state === "on");
     if (mode === "off") {
       e.sub.textContent = open.length
         ? `${open.length} zone${open.length > 1 ? "s" : ""} ouverte${open.length > 1 ? "s" : ""}`
@@ -739,7 +812,7 @@ class AlarmModernCard extends HTMLElement {
     } else if (mode === "exit") {
       e.sub.textContent = "Délai de sortie · quittez les lieux";
     } else if (mode === "armed") {
-      e.sub.textContent = `${stateLabels[s.state]} · ${c.zones.length} zone${
+      e.sub.textContent = `${stateLabels[s.state]} · ${zones.length} zone${
         c.zones.length > 1 ? "s" : ""
       } surveillée${c.zones.length > 1 ? "s" : ""}`;
     } else {
@@ -980,7 +1053,7 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
 /* ------------------------------------------------------------------ */
 
 const FLAT_KEYS = [
-  "name","alarm","hours","refresh","exit_delay","entry_delay",
+  "name","alarm","auto_discover","hours","refresh","exit_delay","entry_delay",
   "show_coverage","show_zones","battery_warning","code_required",
   "call_action","call_label",
 ];
@@ -988,6 +1061,7 @@ const MANAGED_KEYS = [...FLAT_KEYS, "type", "zones", "fire", "sensors", "links",
 
 const LABELS = {
   name: "Nom", alarm: "Entité d'alarme",
+  auto_discover: "Découverte automatique",
   hours: "Fenêtre de couverture", refresh: "Relecture",
   exit_delay: "Délai de sortie", entry_delay: "Délai d'entrée",
   show_coverage: "Afficher la couverture", show_zones: "Afficher les zones",
@@ -998,6 +1072,7 @@ const LABELS = {
 
 const HELPERS = {
   alarm: "Entité alarm_control_panel principale.",
+  auto_discover: "Détecte automatiquement tous les capteurs rattachés au même appareil. La config explicite prime sur la découverte.",
   exit_delay: "Durée du délai de sortie en secondes, pour le compte à rebours de l'anneau.",
   entry_delay: "Durée du délai d'entrée en secondes.",
   code_required: "Si non défini, la carte détecte automatiquement via code_format et code_arm_required.",
@@ -1007,6 +1082,7 @@ const HELPERS = {
 const SCHEMA = [
   { name: "name", selector: { text: {} } },
   { name: "alarm", selector: { entity: { filter: [{ domain: "alarm_control_panel" }] } } },
+  { name: "auto_discover", selector: { boolean: {} } },
   {
     type: "grid", name: "",
     schema: [
