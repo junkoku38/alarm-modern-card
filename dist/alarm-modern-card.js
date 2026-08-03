@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.6.1";
+const CARD_VERSION = "1.6.2";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -476,6 +476,7 @@ class AlarmModernCard extends HTMLElement {
 
         <div class="segw"></div>
         <div class="act"></div>
+        ${(c.sub_alarms && c.sub_alarms.length) ? `<div class="subzones"></div>` : ""}
 
         ${
           c.show_coverage
@@ -489,7 +490,6 @@ class AlarmModernCard extends HTMLElement {
         }
 
         ${c.show_zones && c.zones.length ? `<div class="zones"></div>` : ""}
-        ${(c.sub_alarms && c.sub_alarms.length) ? `<div class="subzones"></div>` : ""}
 
         <div class="accs-wrap">
           ${
@@ -1109,7 +1109,7 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
 
     
 /* Sous-alarmes */
-.subzones{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;position:relative;z-index:1;}
+.subzones{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:14px;position:relative;z-index:1;}
 @media(max-width:360px){.subzones{grid-template-columns:1fr;}}
 .subzone{display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:10px;cursor:pointer;
   background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);transition:.15s;}
