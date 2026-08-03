@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.5.0";
+const CARD_VERSION = "1.6.0";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -109,7 +109,9 @@ class AlarmModernCard extends HTMLElement {
       entry_delay: 30,
       show_coverage: true,
       show_zones: true,
-      show_links: true,
+      show_link_telesurveillance: true,
+      show_link_cellulaire: true,
+      show_link_battery: true,
       sub_alarms: [],
       battery_warning: 30,
       auto_discover: false,
@@ -455,7 +457,7 @@ class AlarmModernCard extends HTMLElement {
 
         <div class="top">
           <div class="sys"><span class="dl"></span><span class="nm"></span> · <b>—</b></div>
-          ${c.show_links !== false ? '<div class="links"></div>' : ""}
+          <div class="links"></div>
         </div>
 
         <div class="stage">
@@ -797,7 +799,20 @@ class AlarmModernCard extends HTMLElement {
 
     /* Liaisons */
     if (e.links) {
-      const links = (c.show_links !== false && c.links) ? c.links : [];
+      const links = (c.links || []).filter((l) => {
+        if (!l.entity) return false;
+        const blob = (l.label || l.entity).toLowerCase();
+        if (blob.includes("télé") || blob.includes("telesurveillance") || blob.includes("tele")) {
+          if (c.show_link_telesurveillance === false) return false;
+        }
+        if (blob.includes("cellulaire") || blob.includes("cellular") || blob.includes("gsm")) {
+          if (c.show_link_cellulaire === false) return false;
+        }
+        if (blob.includes("batterie") || blob.includes("battery") || blob.includes("hub")) {
+          if (c.show_link_battery === false) return false;
+        }
+        return true;
+      });
       e.links.innerHTML = links
         .map((l) => {
           const st = this._st(l.entity);
@@ -904,13 +919,14 @@ class AlarmModernCard extends HTMLElement {
 
     /* Sous-alarmes par zone */
     if (e.subzones && c.sub_alarms && c.sub_alarms.length) {
+      const subList = c.sub_alarms.map((z) => typeof z === "string" ? { entity: z } : z);
       const subLabels = {
         disarmed: "Désarmée", arming: "Activation…", armed_away: "Armée (total)",
         armed_home: "Armée (maison)", armed_night: "Armée (nuit)",
         pending: "Déclenchée", triggered: "ALARME", disarming: "Désactivation…",
       };
       const subCol = { disarmed: "ok", arming: "warn", armed_away: "bad", armed_home: "warn", armed_night: "warn", pending: "bad", triggered: "bad" };
-      e.subzones.innerHTML = c.sub_alarms.map((z) => {
+      e.subzones.innerHTML = subList.map((z) => {
         const st = this._s(z.entity);
         const cls = subCol[st] || "dim";
         const label = z.name || this._st(z.entity)?.attributes?.friendly_name || z.entity;
@@ -1139,7 +1155,7 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
 
 const FLAT_KEYS = [
   "name","alarm","auto_discover","hours","custom_zones","custom_fire","custom_sensors","refresh","exit_delay","entry_delay",
-  "show_coverage","show_zones","show_links","battery_warning","code_required",
+  "show_coverage","show_zones","show_link_telesurveillance","show_link_cellulaire","show_link_battery","battery_warning","code_required",
   "sub_alarms",
   "call_action","call_label",
 ];
@@ -1151,7 +1167,9 @@ const LABELS = {
   hours: "Fenêtre de couverture", refresh: "Relecture",
   exit_delay: "Délai de sortie", entry_delay: "Délai d'entrée",
   show_coverage: "Afficher la couverture", show_zones: "Afficher les zones",
-  show_links: "Afficher les liaisons (télésurveillance, cellulaire…)",
+  show_link_telesurveillance: "Afficher la télésurveillance",
+  show_link_cellulaire: "Afficher le cellulaire",
+  show_link_battery: "Afficher la batterie du hub",
   sub_alarms: "Sous-alarmes par zone",
   battery_warning: "Seuil batterie faible",
   code_required: "Code requis pour armer",
@@ -1168,7 +1186,9 @@ const HELPERS = {
   custom_zones: "Entités d'ouvrants à ajouter aux zones (portillon, porte garage, volet, etc.). Découvertes automatiquement si auto_discover est activé, mais vous pouvez en ajouter d'autres ici.",
   custom_fire: "Détecteurs de fumée ou chaleur supplémentaires.",
   custom_sensors: "Capteurs de batterie supplémentaires à afficher dans le bloc repliable.",
-  show_links: "Masque les pastilles de télésurveillance, cellulaire et batterie du hub en haut à droite.",
+  show_link_telesurveillance: "Pastille de télésurveillance en haut à droite.",
+  show_link_cellulaire: "Pastille de réseau cellulaire en haut à droite.",
+  show_link_battery: "Pastille de batterie du hub en haut à droite.",
   sub_alarms: "Entités alarm_control_panel des sous-zones (RDC, extérieur, garage, sous-sol…). Affichées sous les zones.",
 };
 
@@ -1187,7 +1207,9 @@ const SCHEMA = [
   },
   { name: "show_coverage", selector: { boolean: {} } },
   { name: "show_zones", selector: { boolean: {} } },
-  { name: "show_links", selector: { boolean: {} } },
+  { name: "show_link_telesurveillance", selector: { boolean: {} } },
+  { name: "show_link_cellulaire", selector: { boolean: {} } },
+  { name: "show_link_battery", selector: { boolean: {} } },
   { name: "sub_alarms", selector: { entity: { multiple: true, filter: [{ domain: "alarm_control_panel" }] } } },
   {
     type: "expandable", name: "", title: "Ouvrants et capteurs supplémentaires", icon: "mdi:plus-circle-outline",
@@ -1264,9 +1286,13 @@ class AlarmModernCardEditor extends HTMLElement {
       delete out.custom_sensors;
     }
     if (Array.isArray(v.sub_alarms)) {
+      const prev = out.sub_alarms || [];
       out.sub_alarms = v.sub_alarms.map((id) => {
-        const existing = (out.sub_alarms || []).find((z) => (typeof z === "string" ? z : z.entity) === id);
-        return existing || { entity: id };
+        if (typeof id === "string") {
+          const existing = prev.find((z) => (typeof z === "string" ? z : z.entity) === id);
+          return existing || { entity: id };
+        }
+        return id;
       });
     }
     return out;
