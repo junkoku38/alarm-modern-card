@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -72,6 +72,17 @@ const isDead = (v) => DEAD.includes(v);
 
 /* ------------------------------------------------------------------ */
 
+
+async function ensureHaForm() {
+  if (customElements.get("ha-form")) return true;
+  try {
+    const helpers = await window.loadCardHelpers();
+    const card = helpers.createCardElement({ type: "entities", entities: [] });
+    if (card?.constructor?.getConfigElement) await card.constructor.getConfigElement();
+  } catch (err) { console.warn("alarm-modern-card : ha-form indisponible", err); }
+  return !!customElements.get("ha-form");
+}
+
 class AlarmModernCard extends HTMLElement {
   constructor() {
     super();
@@ -116,12 +127,19 @@ class AlarmModernCard extends HTMLElement {
     if (this.shadowRoot) this.shadowRoot.innerHTML = "";
   }
 
-  static getStubConfig() {
-    return {
-      type: "custom:alarm-modern-card",
-      name: "Alarme",
-      alarm: "alarm_control_panel.maison",
-    };
+  static async getConfigElement() {
+    await ensureHaForm();
+    return document.createElement("alarm-modern-card-editor");
+  }
+
+  static getStubConfig(hass) {
+    const stub = { type: "custom:alarm-modern-card", name: "Alarme" };
+    if (!hass?.states) return { ...stub, alarm: "" };
+    const panel = Object.keys(hass.states).find(
+      (id) => id.startsWith("alarm_control_panel.") && !isDead(hass.states[id]?.state)
+    );
+    if (panel) stub.alarm = panel;
+    return stub;
   }
 
   getCardSize() {
@@ -956,6 +974,129 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
 
 /* ------------------------------------------------------------------ */
 
+
+/* ------------------------------------------------------------------ */
+/* Éditeur visuel                                                      */
+/* ------------------------------------------------------------------ */
+
+const FLAT_KEYS = [
+  "name","alarm","hours","refresh","exit_delay","entry_delay",
+  "show_coverage","show_zones","battery_warning","code_required",
+  "call_action","call_label",
+];
+const MANAGED_KEYS = [...FLAT_KEYS, "type", "zones", "fire", "sensors", "links", "modes"];
+
+const LABELS = {
+  name: "Nom", alarm: "Entité d'alarme",
+  hours: "Fenêtre de couverture", refresh: "Relecture",
+  exit_delay: "Délai de sortie", entry_delay: "Délai d'entrée",
+  show_coverage: "Afficher la couverture", show_zones: "Afficher les zones",
+  battery_warning: "Seuil batterie faible",
+  code_required: "Code requis pour armer",
+  call_action: "Action d'appel (bouton)", call_label: "Libellé du bouton d'appel",
+};
+
+const HELPERS = {
+  alarm: "Entité alarm_control_panel principale.",
+  exit_delay: "Durée du délai de sortie en secondes, pour le compte à rebours de l'anneau.",
+  entry_delay: "Durée du délai d'entrée en secondes.",
+  code_required: "Si non défini, la carte détecte automatiquement via code_format et code_arm_required.",
+  call_action: "Bouton ou script à déclencher en cas d'alarme. script.* et automation.* sont rejetés pour la sécurité.",
+};
+
+const SCHEMA = [
+  { name: "name", selector: { text: {} } },
+  { name: "alarm", selector: { entity: { filter: [{ domain: "alarm_control_panel" }] } } },
+  {
+    type: "grid", name: "",
+    schema: [
+      { name: "exit_delay", selector: { number: { min: 0, max: 300, mode: "box", unit_of_measurement: "s" } } },
+      { name: "entry_delay", selector: { number: { min: 0, max: 300, mode: "box", unit_of_measurement: "s" } } },
+      { name: "battery_warning", selector: { number: { min: 5, max: 90, mode: "box", unit_of_measurement: "%" } } },
+      { name: "hours", selector: { number: { min: 1, max: 168, mode: "box", unit_of_measurement: "h" } } },
+    ],
+  },
+  { name: "show_coverage", selector: { boolean: {} } },
+  { name: "show_zones", selector: { boolean: {} } },
+  { name: "code_required", selector: { boolean: {} } },
+  { name: "call_action", selector: { entity: { filter: [{ domain: ["button", "input_button", "script"] }] } } },
+  { name: "call_label", selector: { text: {} } },
+];
+
+class AlarmModernCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {};
+  }
+  setConfig(config) { this._config = config ? { ...config } : {}; this._render(); }
+  set hass(hass) { this._hass = hass; if (this._form) this._form.hass = hass; this._render(); }
+  connectedCallback() { ensureHaForm().then(() => this._render()); }
+  _data() {
+    const c = this._config || {}; const d = {};
+    FLAT_KEYS.forEach((k) => { if (c[k] !== undefined) d[k] = c[k]; });
+    return d;
+  }
+  _merge(v) {
+    const out = { ...this._config };
+    FLAT_KEYS.forEach((k) => {
+      const val = v[k];
+      if (val === "" || val === undefined || val === null) delete out[k];
+      else out[k] = val;
+    });
+    return out;
+  }
+  _unmanaged() {
+    const extra = Object.keys(this._config || {}).filter((k) => !MANAGED_KEYS.includes(k));
+    if (Array.isArray(this._config.zones) && this._config.zones.length) extra.push("zones");
+    if (Array.isArray(this._config.fire) && this._config.fire.length) extra.push("fire");
+    if (Array.isArray(this._config.sensors) && this._config.sensors.length) extra.push("sensors");
+    if (Array.isArray(this._config.links) && this._config.links.length) extra.push("links");
+    if (Array.isArray(this._config.modes) && this._config.modes.length) extra.push("modes");
+    return extra;
+  }
+  _render() {
+    if (!this.shadowRoot) return;
+    if (!customElements.get("ha-form")) {
+      this.shadowRoot.innerHTML = `<style>${AlarmModernCardEditor.styles}</style>
+        <div class="warn">Le composant <code>ha-form</code> n'a pas pu être chargé.</div>`;
+      return;
+    }
+    if (!this._form) {
+      this.shadowRoot.innerHTML = `<style>${AlarmModernCardEditor.styles}</style>
+        <div class="wrap"></div><div class="note"></div>`;
+      this._form = document.createElement("ha-form");
+      this._form.computeLabel = (s) => LABELS[s.name] || s.name;
+      this._form.computeHelper = (s) => HELPERS[s.name] || "";
+      this._form.addEventListener("value-changed", (ev) => {
+        ev.stopPropagation();
+        fireEvent(this, "config-changed", { config: this._merge(ev.detail.value) });
+      });
+      this.shadowRoot.querySelector(".wrap").appendChild(this._form);
+    }
+    this._form.hass = this._hass;
+    this._form.schema = SCHEMA;
+    this._form.data = this._data();
+    const extra = this._unmanaged();
+    const note = this.shadowRoot.querySelector(".note");
+    if (extra.length) {
+      note.innerHTML = `<div class="keep">Conservé sans être éditable ici : <b></b>. Passez par l'éditeur YAML.</div>`;
+      note.querySelector("b").textContent = extra.join(", ");
+    } else note.innerHTML = "";
+  }
+}
+
+AlarmModernCardEditor.styles = `
+:host{display:block;}
+.warn{padding:10px;border-radius:8px;background:var(--warning-color,#dfb37a);color:#1c1c1c;font-size:12px;}
+.keep{margin-top:12px;padding:10px;border-radius:8px;background:rgba(143,176,201,.16);border:1px solid rgba(143,176,201,.4);font-size:12px;}
+code{font-family:monospace;}
+`;
+
+if (!customElements.get("alarm-modern-card-editor")) {
+  customElements.define("alarm-modern-card-editor", AlarmModernCardEditor);
+}
+
 if (!customElements.get("alarm-modern-card")) {
   customElements.define("alarm-modern-card", AlarmModernCard);
 }
@@ -966,6 +1107,6 @@ window.customCards.push({
   name: "Alarm Modern Card",
   description:
     "Carte d'alarme moderne : anneau d'état, couverture d'armement, zones et catégories repliables.",
-  preview: false,
+  preview: true,
   documentationURL: "https://github.com/junkoku38/alarm-modern-card",
 });
