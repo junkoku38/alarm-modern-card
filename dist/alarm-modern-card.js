@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.4.0";
+const CARD_VERSION = "1.5.0";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -109,6 +109,8 @@ class AlarmModernCard extends HTMLElement {
       entry_delay: 30,
       show_coverage: true,
       show_zones: true,
+      show_links: true,
+      sub_alarms: [],
       battery_warning: 30,
       auto_discover: false,
       links: [],
@@ -403,6 +405,7 @@ class AlarmModernCard extends HTMLElement {
     e.covPct = $(".cov .pct");
     e.covSlot = $(".cov .slot");
     e.zones = $(".zones");
+    e.subzones = $(".subzones");
     e.accWrap = $(".accs-wrap");
     e.fireAcc = $(".acc-fire");
     e.fireSum = $(".acc-fire .accv .txt");
@@ -452,7 +455,7 @@ class AlarmModernCard extends HTMLElement {
 
         <div class="top">
           <div class="sys"><span class="dl"></span><span class="nm"></span> · <b>—</b></div>
-          <div class="links"></div>
+          ${c.show_links !== false ? '<div class="links"></div>' : ""}
         </div>
 
         <div class="stage">
@@ -484,6 +487,7 @@ class AlarmModernCard extends HTMLElement {
         }
 
         ${c.show_zones && c.zones.length ? `<div class="zones"></div>` : ""}
+        ${(c.sub_alarms && c.sub_alarms.length) ? `<div class="subzones"></div>` : ""}
 
         <div class="accs-wrap">
           ${
@@ -792,16 +796,19 @@ class AlarmModernCard extends HTMLElement {
     e.dot.style.boxShadow = `0 0 8px ${dotColor}99`;
 
     /* Liaisons */
-    e.links.innerHTML = c.links
-      .map((l) => {
-        const st = this._st(l.entity);
-        let txt = l.label || st?.attributes?.friendly_name || "";
-        const v = Number(st?.state);
-        if (!Number.isNaN(v) && st) txt = `${Math.round(v)} %`;
-        const bad = st && (st.state === "off" || st.state === "unavailable" || v <= 20);
-        return `<span class="lk${bad ? " bad" : ""}">${esc(txt)}</span>`;
-      })
-      .join("");
+    if (e.links) {
+      const links = (c.show_links !== false && c.links) ? c.links : [];
+      e.links.innerHTML = links
+        .map((l) => {
+          const st = this._st(l.entity);
+          let txt = l.label || st?.attributes?.friendly_name || "";
+          const v = Number(st?.state);
+          if (!Number.isNaN(v) && st) txt = `${Math.round(v)} %`;
+          const bad = st && (st.state === "off" || st.state === "unavailable" || v <= 20);
+          return `<span class="lk${bad ? " bad" : ""}">${esc(txt)}</span>`;
+        })
+        .join("");
+    }
 
     /* Anneau */
     const C = 2 * Math.PI * 81;
@@ -893,6 +900,34 @@ class AlarmModernCard extends HTMLElement {
       el.addEventListener("click", () => acts[Number(el.dataset.i)].run())
     );
     e.actions.classList.toggle("hidden", !acts.length);
+
+
+    /* Sous-alarmes par zone */
+    if (e.subzones && c.sub_alarms && c.sub_alarms.length) {
+      const subLabels = {
+        disarmed: "Désarmée", arming: "Activation…", armed_away: "Armée (total)",
+        armed_home: "Armée (maison)", armed_night: "Armée (nuit)",
+        pending: "Déclenchée", triggered: "ALARME", disarming: "Désactivation…",
+      };
+      const subCol = { disarmed: "ok", arming: "warn", armed_away: "bad", armed_home: "warn", armed_night: "warn", pending: "bad", triggered: "bad" };
+      e.subzones.innerHTML = c.sub_alarms.map((z) => {
+        const st = this._s(z.entity);
+        const cls = subCol[st] || "dim";
+        const label = z.name || this._st(z.entity)?.attributes?.friendly_name || z.entity;
+        const stateLabel = subLabels[st] || st || "—";
+        const dead = isDead(st);
+        return `<div class="subzone ${dead ? "dead" : cls}" data-e="${esc(z.entity)}">
+          <span class="szdot ${dead ? "" : cls}"></span>
+          <span class="szname">${esc(label)}</span>
+          <span class="szstate ${cls}">${dead ? "Hors ligne" : esc(stateLabel)}</span>
+        </div>`;
+      }).join("");
+      e.subzones.querySelectorAll(".subzone").forEach((el) =>
+        el.addEventListener("click", (ev) => { ev.stopPropagation(); this._more(el.dataset.e); })
+      );
+    } else if (e.subzones) {
+      e.subzones.innerHTML = "";
+    }
 
     this._renderZones();
     this._renderFire();
@@ -1056,6 +1091,22 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
   color:rgba(255,255,255,.42);position:relative;z-index:1;}
 .evd{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.3);flex-shrink:0;}
 
+    
+/* Sous-alarmes */
+.subzones{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;position:relative;z-index:1;}
+@media(max-width:360px){.subzones{grid-template-columns:1fr;}}
+.subzone{display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:10px;cursor:pointer;
+  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);transition:.15s;}
+.subzone:hover{background:rgba(255,255,255,.05);}
+.subzone.dead{opacity:.4;}
+.szdot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.szdot.ok{background:var(--am-ok);} .szdot.warn{background:var(--am-warn);}
+.szdot.bad{background:var(--am-alarm);} .szdot.dim{background:rgba(255,255,255,.2);}
+.szname{flex:1;min-width:0;font-size:10.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.szstate{font-size:9.5px;font-weight:700;white-space:nowrap;}
+.szstate.ok{color:var(--am-ok);} .szstate.warn{color:var(--am-warn);}
+.szstate.bad{color:var(--am-alarm);} .szstate.dim{color:rgba(255,255,255,.3);}
+
 /* Clavier */
 .padw{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;}
 .padbg{position:absolute;inset:0;background:rgba(10,12,16,.86);backdrop-filter:blur(6px);}
@@ -1088,10 +1139,11 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
 
 const FLAT_KEYS = [
   "name","alarm","auto_discover","hours","custom_zones","custom_fire","custom_sensors","refresh","exit_delay","entry_delay",
-  "show_coverage","show_zones","battery_warning","code_required",
+  "show_coverage","show_zones","show_links","battery_warning","code_required",
+  "sub_alarms",
   "call_action","call_label",
 ];
-const MANAGED_KEYS = [...FLAT_KEYS, "type", "zones", "fire", "sensors", "links", "modes", "custom_zones", "custom_fire", "custom_sensors"];
+const MANAGED_KEYS = [...FLAT_KEYS, "type", "zones", "fire", "sensors", "links", "modes", "custom_zones", "custom_fire", "custom_sensors", "sub_alarms"];
 
 const LABELS = {
   name: "Nom", alarm: "Entité d'alarme",
@@ -1099,6 +1151,8 @@ const LABELS = {
   hours: "Fenêtre de couverture", refresh: "Relecture",
   exit_delay: "Délai de sortie", entry_delay: "Délai d'entrée",
   show_coverage: "Afficher la couverture", show_zones: "Afficher les zones",
+  show_links: "Afficher les liaisons (télésurveillance, cellulaire…)",
+  sub_alarms: "Sous-alarmes par zone",
   battery_warning: "Seuil batterie faible",
   code_required: "Code requis pour armer",
   call_action: "Action d'appel (bouton)", call_label: "Libellé du bouton d'appel",
@@ -1114,6 +1168,8 @@ const HELPERS = {
   custom_zones: "Entités d'ouvrants à ajouter aux zones (portillon, porte garage, volet, etc.). Découvertes automatiquement si auto_discover est activé, mais vous pouvez en ajouter d'autres ici.",
   custom_fire: "Détecteurs de fumée ou chaleur supplémentaires.",
   custom_sensors: "Capteurs de batterie supplémentaires à afficher dans le bloc repliable.",
+  show_links: "Masque les pastilles de télésurveillance, cellulaire et batterie du hub en haut à droite.",
+  sub_alarms: "Entités alarm_control_panel des sous-zones (RDC, extérieur, garage, sous-sol…). Affichées sous les zones.",
 };
 
 const SCHEMA = [
@@ -1131,6 +1187,8 @@ const SCHEMA = [
   },
   { name: "show_coverage", selector: { boolean: {} } },
   { name: "show_zones", selector: { boolean: {} } },
+  { name: "show_links", selector: { boolean: {} } },
+  { name: "sub_alarms", selector: { entity: { multiple: true, filter: [{ domain: "alarm_control_panel" }] } } },
   {
     type: "expandable", name: "", title: "Ouvrants et capteurs supplémentaires", icon: "mdi:plus-circle-outline",
     schema: [
@@ -1161,6 +1219,7 @@ class AlarmModernCardEditor extends HTMLElement {
     d.custom_zones = (c.zones || []).map((z) => z.entity);
     d.custom_fire = (c.fire || []).map((f) => f.entity);
     d.custom_sensors = (c.sensors || []).map((s) => s.entity);
+    d.sub_alarms = (c.sub_alarms || []).map((z) => typeof z === "string" ? z : z.entity);
     return d;
   }
   _merge(v) {
@@ -1204,6 +1263,12 @@ class AlarmModernCardEditor extends HTMLElement {
       out.sensors = sensors;
       delete out.custom_sensors;
     }
+    if (Array.isArray(v.sub_alarms)) {
+      out.sub_alarms = v.sub_alarms.map((id) => {
+        const existing = (out.sub_alarms || []).find((z) => (typeof z === "string" ? z : z.entity) === id);
+        return existing || { entity: id };
+      });
+    }
     return out;
   }
   _unmanaged() {
@@ -1213,6 +1278,7 @@ class AlarmModernCardEditor extends HTMLElement {
     if (Array.isArray(this._config.sensors) && this._config.sensors.length) extra.push("sensors (noms et temp)");
     if (Array.isArray(this._config.links) && this._config.links.length) extra.push("links");
     if (Array.isArray(this._config.modes) && this._config.modes.length) extra.push("modes");
+    if (Array.isArray(this._config.sub_alarms) && this._config.sub_alarms.length) extra.push("sub_alarms (noms)");
     return extra;
   }
   _render() {
