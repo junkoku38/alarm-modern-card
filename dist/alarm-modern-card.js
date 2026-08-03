@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.6.2";
+const CARD_VERSION = "1.6.3";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -932,10 +932,11 @@ class AlarmModernCard extends HTMLElement {
         const label = z.name || this._st(z.entity)?.attributes?.friendly_name || z.entity;
         const stateLabel = subLabels[st] || st || "—";
         const dead = isDead(st);
+        const dotCol = dead ? "rgba(255,255,255,.2)" : {ok:"var(--am-ok)",warn:"var(--am-warn)",bad:"var(--am-alarm)",dim:"rgba(255,255,255,.2)"}[cls];
         return `<div class="subzone ${dead ? "dead" : cls}" data-e="${esc(z.entity)}">
-          <span class="szdot ${dead ? "" : cls}"></span>
+          <span class="szdot" style="background:${dotCol}"></span>
           <span class="szname">${esc(label)}</span>
-          <span class="szstate ${cls}">${dead ? "Hors ligne" : esc(stateLabel)}</span>
+          <span class="szstate" style="color:${dotCol}">${dead ? "Hors ligne" : esc(stateLabel)}</span>
         </div>`;
       }).join("");
       e.subzones.querySelectorAll(".subzone").forEach((el) =>
@@ -1111,17 +1112,16 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
 /* Sous-alarmes */
 .subzones{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:14px;position:relative;z-index:1;}
 @media(max-width:360px){.subzones{grid-template-columns:1fr;}}
-.subzone{display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:10px;cursor:pointer;
-  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);transition:.15s;}
-.subzone:hover{background:rgba(255,255,255,.05);}
-.subzone.dead{opacity:.4;}
-.szdot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
-.szdot.ok{background:var(--am-ok);} .szdot.warn{background:var(--am-warn);}
-.szdot.bad{background:var(--am-alarm);} .szdot.dim{background:rgba(255,255,255,.2);}
-.szname{flex:1;min-width:0;font-size:10.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.szstate{font-size:9.5px;font-weight:700;white-space:nowrap;}
-.szstate.ok{color:var(--am-ok);} .szstate.warn{color:var(--am-warn);}
-.szstate.bad{color:var(--am-alarm);} .szstate.dim{color:rgba(255,255,255,.3);}
+.subzone{display:flex;align-items:center;gap:8px;padding:9px 11px;border-radius:13px;cursor:pointer;
+  background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.07);transition:.15s;}
+.subzone:hover{background:rgba(255,255,255,.07);}
+.subzone.ok{border-color:rgba(126,224,164,.18);}
+.subzone.warn{border-color:rgba(255,199,107,.22);background:rgba(255,199,107,.06);}
+.subzone.bad{border-color:rgba(255,107,92,.28);background:rgba(255,107,92,.08);}
+.subzone.dead{opacity:.35;}
+.szdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor;}
+.szname{flex:1;min-width:0;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.szstate{font-size:10px;font-weight:700;white-space:nowrap;}
 
 /* Clavier */
 .padw{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;}
