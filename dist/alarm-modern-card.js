@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.6.0";
+const CARD_VERSION = "1.6.1";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -927,7 +927,7 @@ class AlarmModernCard extends HTMLElement {
       };
       const subCol = { disarmed: "ok", arming: "warn", armed_away: "bad", armed_home: "warn", armed_night: "warn", pending: "bad", triggered: "bad" };
       e.subzones.innerHTML = subList.map((z) => {
-        const st = this._s(z.entity);
+        const st = this._st(z.entity)?.state;
         const cls = subCol[st] || "dim";
         const label = z.name || this._st(z.entity)?.attributes?.friendly_name || z.entity;
         const stateLabel = subLabels[st] || st || "—";
