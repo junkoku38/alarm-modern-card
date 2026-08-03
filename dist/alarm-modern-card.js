@@ -5,7 +5,7 @@
  * zones, catégories incendie et capteurs repliables.
  */
 
-const CARD_VERSION = "1.2.0";
+const CARD_VERSION = "1.3.0";
 
 console.info(
   `%c ALARM-MODERN-CARD %c v${CARD_VERSION} `,
@@ -1053,11 +1053,11 @@ ha-card::after{content:"";position:absolute;left:20px;right:20px;top:0;height:1p
 /* ------------------------------------------------------------------ */
 
 const FLAT_KEYS = [
-  "name","alarm","auto_discover","hours","refresh","exit_delay","entry_delay",
+  "name","alarm","auto_discover","hours","custom_zones","custom_fire","custom_sensors","refresh","exit_delay","entry_delay",
   "show_coverage","show_zones","battery_warning","code_required",
   "call_action","call_label",
 ];
-const MANAGED_KEYS = [...FLAT_KEYS, "type", "zones", "fire", "sensors", "links", "modes"];
+const MANAGED_KEYS = [...FLAT_KEYS, "type", "zones", "fire", "sensors", "links", "modes", "custom_zones", "custom_fire", "custom_sensors"];
 
 const LABELS = {
   name: "Nom", alarm: "Entité d'alarme",
@@ -1077,6 +1077,9 @@ const HELPERS = {
   entry_delay: "Durée du délai d'entrée en secondes.",
   code_required: "Si non défini, la carte détecte automatiquement via code_format et code_arm_required.",
   call_action: "Bouton ou script à déclencher en cas d'alarme. script.* et automation.* sont rejetés pour la sécurité.",
+  custom_zones: "Entités d'ouvrants à ajouter aux zones (portillon, porte garage, volet, etc.). Découvertes automatiquement si auto_discover est activé, mais vous pouvez en ajouter d'autres ici.",
+  custom_fire: "Détecteurs de fumée ou chaleur supplémentaires.",
+  custom_sensors: "Capteurs de batterie supplémentaires à afficher dans le bloc repliable.",
 };
 
 const SCHEMA = [
@@ -1094,6 +1097,14 @@ const SCHEMA = [
   },
   { name: "show_coverage", selector: { boolean: {} } },
   { name: "show_zones", selector: { boolean: {} } },
+  {
+    type: "expandable", name: "", title: "Ouvrants et capteurs supplémentaires", icon: "mdi:plus-circle-outline",
+    schema: [
+      { name: "custom_zones", selector: { entity: { multiple: true, filter: [{ domain: "binary_sensor", device_class: ["door", "window", "opening", "garage_door", "gate", "blind", "shutter", "awning"] }] } } },
+      { name: "custom_fire", selector: { entity: { multiple: true, filter: [{ domain: "binary_sensor", device_class: ["smoke", "heat", "carbon_monoxide", "gas"] }] } } },
+      { name: "custom_sensors", selector: { entity: { multiple: true, filter: [{ domain: "sensor", device_class: "battery" }] } } },
+    ],
+  },
   { name: "code_required", selector: { boolean: {} } },
   { name: "call_action", selector: { entity: { filter: [{ domain: ["button", "input_button", "script"] }] } } },
   { name: "call_label", selector: { text: {} } },
@@ -1111,6 +1122,11 @@ class AlarmModernCardEditor extends HTMLElement {
   _data() {
     const c = this._config || {}; const d = {};
     FLAT_KEYS.forEach((k) => { if (c[k] !== undefined) d[k] = c[k]; });
+    // Remplir custom_* avec les entity_id deja presentes dans zones/fire/sensors
+    // pour que l'utilisateur voie ce qui est configure
+    d.custom_zones = (c.zones || []).map((z) => z.entity);
+    d.custom_fire = (c.fire || []).map((f) => f.entity);
+    d.custom_sensors = (c.sensors || []).map((s) => s.entity);
     return d;
   }
   _merge(v) {
@@ -1120,13 +1136,47 @@ class AlarmModernCardEditor extends HTMLElement {
       if (val === "" || val === undefined || val === null) delete out[k];
       else out[k] = val;
     });
+    // Convertir les listes d'entity_id en entrees zones/fire/sensors
+    const known = (key) => new Set((out[key] || []).map((x) => x.entity));
+    if (Array.isArray(v.custom_zones)) {
+      const existing = known("zones");
+      const zones = [...(out.zones || [])];
+      for (const id of v.custom_zones) {
+        if (!existing.has(id)) {
+          const st = this._hass?.states?.[id];
+          const dc = st?.attributes?.device_class;
+          zones.push({ entity: id, type: dc === "window" ? "window" : "door" });
+          existing.add(id);
+        }
+      }
+      out.zones = zones;
+      delete out.custom_zones;
+    }
+    if (Array.isArray(v.custom_fire)) {
+      const existing = known("fire");
+      const fire = [...(out.fire || [])];
+      for (const id of v.custom_fire) {
+        if (!existing.has(id)) { fire.push({ entity: id }); existing.add(id); }
+      }
+      out.fire = fire;
+      delete out.custom_fire;
+    }
+    if (Array.isArray(v.custom_sensors)) {
+      const existing = known("sensors");
+      const sensors = [...(out.sensors || [])];
+      for (const id of v.custom_sensors) {
+        if (!existing.has(id)) { sensors.push({ entity: id }); existing.add(id); }
+      }
+      out.sensors = sensors;
+      delete out.custom_sensors;
+    }
     return out;
   }
   _unmanaged() {
     const extra = Object.keys(this._config || {}).filter((k) => !MANAGED_KEYS.includes(k));
-    if (Array.isArray(this._config.zones) && this._config.zones.length) extra.push("zones");
-    if (Array.isArray(this._config.fire) && this._config.fire.length) extra.push("fire");
-    if (Array.isArray(this._config.sensors) && this._config.sensors.length) extra.push("sensors");
+    if (Array.isArray(this._config.zones) && this._config.zones.length) extra.push("zones (noms et types)");
+    if (Array.isArray(this._config.fire) && this._config.fire.length) extra.push("fire (noms et temp)");
+    if (Array.isArray(this._config.sensors) && this._config.sensors.length) extra.push("sensors (noms et temp)");
     if (Array.isArray(this._config.links) && this._config.links.length) extra.push("links");
     if (Array.isArray(this._config.modes) && this._config.modes.length) extra.push("modes");
     return extra;
